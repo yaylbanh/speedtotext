@@ -13,11 +13,20 @@ Giao dien: Gradio, launch(share=True) -> public link *.gradio.live.
 """
 
 import os
+# NE SYMLINK tren Windows (tranh WinError 1314): tat symlink cache cua HuggingFace,
+# tai model thanh FILE THAT. Phai set TRUOC khi import huggingface_hub/faster_whisper.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
+
 import time
 import tempfile
 
 import gradio as gr
 from faster_whisper import WhisperModel
+from huggingface_hub import snapshot_download
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+MODELS_DIR = os.path.join(APP_DIR, "models")
 
 # ============================================================
 # 0) THU MUC GOOGLE DRIVE (neu da mount o notebook)
@@ -82,10 +91,19 @@ def get_model(model_name):
         model_name = "large-v3"
     if model_name not in _MODEL_CACHE:
         repo = MODEL_MAP[model_name]
-        print(f"[*] Dang nap model '{model_name}' ({repo}) ...")
+        local_dir = os.path.join(MODELS_DIR, model_name)
+        print(f"[*] Dang tai/kiem tra model '{model_name}' ({repo}) -> {local_dir}")
         t0 = time.time()
+        # Tai thanh FILE THAT vao local_dir (KHONG symlink) -> ne WinError 1314.
+        # local_dir_use_symlinks=False cho ban cu; ban moi da bo tham so nay nen bat TypeError.
+        try:
+            local_path = snapshot_download(
+                repo_id=repo, local_dir=local_dir, local_dir_use_symlinks=False
+            )
+        except TypeError:
+            local_path = snapshot_download(repo_id=repo, local_dir=local_dir)
         _MODEL_CACHE[model_name] = WhisperModel(
-            repo, device=DEVICE, compute_type=COMPUTE_TYPE
+            local_path, device=DEVICE, compute_type=COMPUTE_TYPE
         )
         print(f"[*] Nap xong '{model_name}' trong {time.time()-t0:.1f}s")
     return _MODEL_CACHE[model_name]

@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
+models/
 *.srt
 *.mp3
 *.wav

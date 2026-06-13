@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Speed To Text - Web tool chay tren Google Colab (GPU T4).
-Upload audio (MP3/WAV/M4A) -> tra ve file .srt tieng Trung de tai ve.
+Nhan audio (MP3/WAV/M4A) -> tra ve file .srt tieng Trung.
+
+2 cach dua file vao:
+  1) Chon file tu Google Drive (thu muc MyDrive/STT_input) -> hop file lon, on dinh.
+  2) Upload truc tiep tren web -> tien cho file nho.
+SRT xuat ra: MyDrive/STT_output (neu da mount Drive) + nut tai ve tren web.
 
 Engine: faster-whisper (CTranslate2). Mac dinh model large-v3 tren GPU.
 Giao dien: Gradio, launch(share=True) -> public link *.gradio.live.
@@ -13,6 +18,36 @@ import tempfile
 
 import gradio as gr
 from faster_whisper import WhisperModel
+
+# ============================================================
+# 0) THU MUC GOOGLE DRIVE (neu da mount o notebook)
+# ============================================================
+DRIVE_ROOT = "/content/drive/MyDrive"
+DRIVE_INPUT = os.path.join(DRIVE_ROOT, "STT_input")
+DRIVE_OUTPUT = os.path.join(DRIVE_ROOT, "STT_output")
+AUDIO_EXTS = (".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".mp4", ".mkv")
+
+def drive_mounted():
+    return os.path.isdir(DRIVE_ROOT)
+
+if drive_mounted():
+    os.makedirs(DRIVE_INPUT, exist_ok=True)
+    os.makedirs(DRIVE_OUTPUT, exist_ok=True)
+    print(f"[*] Drive da mount. Bo file vao: {DRIVE_INPUT} | SRT xuat ra: {DRIVE_OUTPUT}")
+else:
+    print("[!] Chua mount Google Drive -> chi dung che do upload web, SRT luu tam.")
+
+def list_input_files():
+    """Liet ke cac file audio trong thu muc Drive STT_input."""
+    if not drive_mounted():
+        return []
+    try:
+        return sorted(
+            f for f in os.listdir(DRIVE_INPUT)
+            if f.lower().endswith(AUDIO_EXTS)
+        )
+    except Exception:
+        return []
 
 # ============================================================
 # 1) PHAT HIEN PHAN CUNG (GPU hay CPU)
@@ -35,7 +70,6 @@ print(f"[*] Thiet bi: device={DEVICE} | compute_type={COMPUTE_TYPE}")
 # ============================================================
 # 2) NAP MODEL MOT LAN (cache theo ten, khong nap trung)
 # ============================================================
-# faster-whisper nhan thang "large-v3", "medium"; rieng turbo tro toi repo CT2.
 MODEL_MAP = {
     "large-v3": "large-v3",
     "large-v3-turbo": "deepdml/faster-whisper-large-v3-turbo-ct2",
@@ -44,7 +78,6 @@ MODEL_MAP = {
 _MODEL_CACHE = {}
 
 def get_model(model_name):
-    """Nap (hoac lay tu cache) WhisperModel theo ten."""
     if model_name not in MODEL_MAP:
         model_name = "large-v3"
     if model_name not in _MODEL_CACHE:
@@ -57,7 +90,6 @@ def get_model(model_name):
         print(f"[*] Nap xong '{model_name}' trong {time.time()-t0:.1f}s")
     return _MODEL_CACHE[model_name]
 
-# Nap san model mac dinh ngay luc khoi dong (request dau khong phai cho)
 print("[*] Nap san model mac dinh large-v3...")
 try:
     get_model("large-v3")
@@ -65,10 +97,9 @@ except Exception as exc:
     print(f"[!] Khong nap duoc large-v3 luc khoi dong: {exc}")
 
 # ============================================================
-# 3) HAM TIEN ICH: format thoi gian SRT
+# 3) format thoi gian SRT
 # ============================================================
 def fmt_ts(seconds):
-    """Doi giay (float) -> 'HH:MM:SS,mmm' chuan SRT."""
     if seconds is None or seconds < 0:
         seconds = 0.0
     ms = int(round(seconds * 1000))
@@ -78,13 +109,22 @@ def fmt_ts(seconds):
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 # ============================================================
-# 4) HAM CHINH: transcribe audio -> file .srt + text xem truoc
+# 4) HAM CHINH: transcribe -> file .srt + text xem truoc
 # ============================================================
-def transcribe(audio_path, model_name, language, progress=gr.Progress()):
+def _resolve_source(drive_file, upload_path):
+    """Uu tien file upload; neu khong co thi lay file da chon tu Drive."""
+    if upload_path:
+        return upload_path
+    if drive_file:
+        return os.path.join(DRIVE_INPUT, drive_file)
+    return None
+
+def transcribe(drive_file, upload_path, model_name, language, progress=gr.Progress()):
+    audio_path = _resolve_source(drive_file, upload_path)
     if not audio_path:
-        raise gr.Error("Chua chon file audio. Hay upload MP3/WAV/M4A.")
+        raise gr.Error("Chua co file. Chon file tu Drive HOAC upload 1 file audio.")
     if not os.path.isfile(audio_path) or os.path.getsize(audio_path) == 0:
-        raise gr.Error("File rong hoac khong doc duoc. Kiem tra lai file audio.")
+        raise gr.Error(f"File rong/khong doc duoc: {audio_path}")
 
     progress(0.05, desc=f"Nap model {model_name}...")
     try:
@@ -95,17 +135,12 @@ def transcribe(audio_path, model_name, language, progress=gr.Progress()):
     progress(0.15, desc="Dang nhan dang giong noi...")
     t0 = time.time()
     try:
-        segments, info = model.transcribe(
-            audio_path,
-            language=language,
-            vad_filter=True,
-        )
+        segments, info = model.transcribe(audio_path, language=language, vad_filter=True)
     except Exception as exc:
         raise gr.Error(f"Loi khi transcribe: {exc}")
 
     total_dur = float(getattr(info, "duration", 0) or 0)
-    srt_lines = []
-    preview_lines = []
+    srt_lines, preview_lines = [], []
     idx = 1
     for seg in segments:
         text = (seg.text or "").strip()
@@ -122,18 +157,33 @@ def transcribe(audio_path, model_name, language, progress=gr.Progress()):
     if not srt_lines:
         raise gr.Error("Khong nhan dang duoc noi dung nao (audio rong/khong co tieng noi?).")
 
-    # Ghi file .srt vao thu muc tam, ten theo file goc
     base = os.path.splitext(os.path.basename(audio_path))[0]
-    out_dir = tempfile.mkdtemp(prefix="stt_")
-    srt_path = os.path.join(out_dir, f"{base}_STT.srt")
-    with open(srt_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(srt_lines))
+    content = "\n".join(srt_lines)
+
+    # Ghi ra Drive (neu co) de tu sync ve may; luon co them ban tam de tai tren web
+    saved_msgs = []
+    if drive_mounted():
+        drive_srt = os.path.join(DRIVE_OUTPUT, f"{base}_STT.srt")
+        try:
+            with open(drive_srt, "w", encoding="utf-8") as f:
+                f.write(content)
+            saved_msgs.append(f"Da luu ra Drive: {drive_srt}")
+        except Exception as exc:
+            saved_msgs.append(f"[!] Khong ghi duoc ra Drive: {exc}")
+
+    tmp_dir = tempfile.mkdtemp(prefix="stt_")
+    tmp_srt = os.path.join(tmp_dir, f"{base}_STT.srt")
+    with open(tmp_srt, "w", encoding="utf-8") as f:
+        f.write(content)
 
     elapsed = time.time() - t0
-    print(f"[*] Xong: {idx-1} dong | audio {total_dur:.0f}s | transcribe {elapsed:.1f}s "
-          f"| toc do x{(total_dur/elapsed):.1f}" if elapsed > 0 else "")
-    preview = "\n".join(preview_lines)
-    return srt_path, preview
+    speed = f"x{(total_dur/elapsed):.1f}" if elapsed > 0 and total_dur > 0 else "?"
+    print(f"[*] Xong: {idx-1} dong | audio {total_dur:.0f}s | transcribe {elapsed:.1f}s | toc do {speed}")
+    if saved_msgs:
+        print("[*] " + " | ".join(saved_msgs))
+
+    preview = ("\n".join(saved_msgs) + "\n\n" if saved_msgs else "") + "\n".join(preview_lines)
+    return tmp_srt, preview
 
 # ============================================================
 # 5) GIAO DIEN GRADIO
@@ -141,33 +191,39 @@ def transcribe(audio_path, model_name, language, progress=gr.Progress()):
 with gr.Blocks(title="Speed To Text - SRT tieng Trung") as demo:
     gr.Markdown(
         "# 🎙️ Speed To Text → SRT\n"
-        "Upload audio (MP3/WAV/M4A) → nhan ve file phu de **.srt** de tai ve.\n"
-        f"*(Thiet bi dang chay: **{DEVICE.upper()}**)*"
+        f"*(Thiet bi: **{DEVICE.upper()}** | Drive: **{'da mount' if drive_mounted() else 'chua mount'}**)*\n\n"
+        + (f"Bo file audio vao Google Drive: `MyDrive/STT_input/` roi bam **Lam moi** de chon.\n"
+           f"SRT se xuat ra `MyDrive/STT_output/`."
+           if drive_mounted()
+           else "Drive chua mount -> dung o **Upload** ben duoi.")
     )
     with gr.Row():
         with gr.Column():
-            audio_in = gr.Audio(type="filepath", label="File audio (MP3/WAV/M4A)")
+            drive_dd = gr.Dropdown(
+                choices=list_input_files(), value=None,
+                label="📁 Chon file tu Drive (MyDrive/STT_input)",
+            )
+            refresh_btn = gr.Button("🔄 Lam moi danh sach Drive", size="sm")
+            upload_in = gr.Audio(type="filepath", label="… hoac Upload truc tiep (file nho)")
             model_in = gr.Dropdown(
-                choices=["large-v3", "large-v3-turbo", "medium"],
-                value="large-v3",
+                choices=["large-v3", "large-v3-turbo", "medium"], value="large-v3",
                 label="Model (large-v3 = xin nhat)",
             )
             lang_in = gr.Dropdown(
-                choices=["zh", "vi", "en", "ja", "ko"],
-                value="zh",
+                choices=["zh", "vi", "en", "ja", "ko"], value="zh",
                 label="Ngon ngu (zh = tieng Trung)",
             )
             btn = gr.Button("▶ Tao phu de SRT", variant="primary")
         with gr.Column():
             srt_out = gr.File(label="📥 Tai file .srt ve")
-            preview_out = gr.Textbox(label="Xem truoc noi dung", lines=18)
+            preview_out = gr.Textbox(label="Xem truoc / Trang thai", lines=20)
 
+    refresh_btn.click(fn=lambda: gr.update(choices=list_input_files()), outputs=drive_dd)
     btn.click(
         fn=transcribe,
-        inputs=[audio_in, model_in, lang_in],
+        inputs=[drive_dd, upload_in, model_in, lang_in],
         outputs=[srt_out, preview_out],
     )
 
 if __name__ == "__main__":
-    # share=True -> Gradio tu tao public link *.gradio.live (khong can cloudflared)
     demo.queue().launch(share=True)

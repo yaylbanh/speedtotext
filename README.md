@@ -13,11 +13,15 @@ Engine: **faster-whisper** (CTranslate2), mặc định model **large-v3** trên
 
 1. Bấm badge **Open in Colab** ở trên.
 2. Trên Colab chọn: `Runtime → Change runtime type → GPU T4 → Save`.
-3. Bấm ▶ chạy ô code duy nhất.
+3. Bấm ▶ chạy ô code duy nhất → bấm **Accept** ở popup cho phép Google Drive.
 4. Chờ ra link `https://xxxx.gradio.live` → mở link.
-5. Upload MP3 → bấm **Tạo phụ đề SRT** → tải `.srt` về.
+5. Cách dùng file:
+   - **Khuyến nghị (file lớn):** bỏ audio vào `MyDrive/STT_input/` → trên web bấm **Làm mới** → chọn file → **Tạo phụ đề SRT**. Kết quả ra `MyDrive/STT_output/`.
+   - **Hoặc:** upload trực tiếp trên web (hợp file nhỏ).
+6. Tải `.srt` về (hoặc lấy từ `MyDrive/STT_output/`).
 
 > ⚠️ Phải chọn **GPU T4** trước khi chạy, nếu không nó chạy CPU và rất chậm.
+> 💡 File lớn nên dùng Drive (`STT_input`) thay vì upload web để tránh đứt giữa chừng.
 
 ---
 

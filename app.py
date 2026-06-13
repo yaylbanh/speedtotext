@@ -92,16 +92,28 @@ def get_model(model_name):
     if model_name not in _MODEL_CACHE:
         repo = MODEL_MAP[model_name]
         local_dir = os.path.join(MODELS_DIR, model_name)
-        print(f"[*] Dang tai/kiem tra model '{model_name}' ({repo}) -> {local_dir}")
         t0 = time.time()
-        # Tai thanh FILE THAT vao local_dir (KHONG symlink) -> ne WinError 1314.
-        # local_dir_use_symlinks=False cho ban cu; ban moi da bo tham so nay nen bat TypeError.
+        local_path = None
+
+        # 1) DUNG LAI ban da tai trong cache HuggingFace neu day du
+        #    (khong tai lai, khong copy, khong dung symlink).
         try:
-            local_path = snapshot_download(
-                repo_id=repo, local_dir=local_dir, local_dir_use_symlinks=False
-            )
-        except TypeError:
-            local_path = snapshot_download(repo_id=repo, local_dir=local_dir)
+            cached = snapshot_download(repo_id=repo, local_files_only=True)
+            if os.path.isfile(os.path.join(cached, "model.bin")):
+                local_path = cached
+                print(f"[*] Dung lai model '{model_name}' da co trong cache: {cached}")
+        except Exception:
+            pass
+
+        # 2) Chua co -> tai thanh FILE THAT vao models/ (KHONG symlink -> ne WinError 1314)
+        if local_path is None:
+            print(f"[*] Dang tai model '{model_name}' ({repo}) -> {local_dir}")
+            try:
+                local_path = snapshot_download(
+                    repo_id=repo, local_dir=local_dir, local_dir_use_symlinks=False
+                )
+            except TypeError:
+                local_path = snapshot_download(repo_id=repo, local_dir=local_dir)
         _MODEL_CACHE[model_name] = WhisperModel(
             local_path, device=DEVICE, compute_type=COMPUTE_TYPE
         )

@@ -1,2 +1,8 @@
 faster-whisper>=1.1.0
 gradio>=4.44.0
+
+# CUDA 12 runtime cho ctranslate2 (faster-whisper) chay GPU tren Windows.
+# Colab/Linux co san CUDA nen bo qua (chi cai tren Windows).
+nvidia-cublas-cu12; platform_system == "Windows"
+nvidia-cudnn-cu12; platform_system == "Windows"
+nvidia-cuda-runtime-cu12; platform_system == "Windows"

@@ -18,6 +18,42 @@ import os
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS", "1")
 
+import glob
+import sysconfig
+
+
+def _add_cuda_dll_dirs():
+    """Them thu muc DLL cua cac goi nvidia-*-cu12 (cuBLAS/cuDNN) vao duong dan tim DLL.
+    Can cho Windows de ctranslate2/faster-whisper tim thay cublas64_12.dll, cudnn*.dll
+    khi chay GPU. Tren Linux/Colab khong can (CUDA da co san)."""
+    if os.name != "nt":
+        return
+    roots = set()
+    for key in ("purelib", "platlib"):
+        p = sysconfig.get_paths().get(key)
+        if p:
+            roots.add(p)
+    bindirs = []
+    for root in roots:
+        bindirs += glob.glob(os.path.join(root, "nvidia", "*", "bin"))
+    for bindir in bindirs:
+        try:
+            os.add_dll_directory(bindir)
+        except Exception:
+            pass
+    # QUAN TRONG: ctranslate2 nap cublas/cudnn theo PATH, add_dll_directory chua du.
+    if bindirs:
+        os.environ["PATH"] = os.pathsep.join(bindirs) + os.pathsep + os.environ.get("PATH", "")
+    added = len(bindirs)
+    if added:
+        print(f"[*] Da nap {added} thu muc DLL CUDA (cuBLAS/cuDNN/cudart) cho GPU.")
+    else:
+        print("[!] Khong thay DLL CUDA pip (nvidia-cublas-cu12 / nvidia-cudnn-cu12). "
+              "Neu chay GPU bao thieu cublas64_12.dll -> cai 2 goi do.")
+
+
+_add_cuda_dll_dirs()
+
 import time
 import tempfile
 

@@ -95,17 +95,23 @@ def get_model(model_name):
         t0 = time.time()
         local_path = None
 
-        # 1) DUNG LAI ban da tai trong cache HuggingFace neu day du
-        #    (khong tai lai, khong copy, khong dung symlink).
-        try:
-            cached = snapshot_download(repo_id=repo, local_files_only=True)
-            if os.path.isfile(os.path.join(cached, "model.bin")):
-                local_path = cached
-                print(f"[*] Dung lai model '{model_name}' da co trong cache: {cached}")
-        except Exception:
-            pass
+        # 0) UU TIEN model nam SAN trong thu muc models/ cua tool (tu chua, di kem tool,
+        #    ton tai mai mai - khong bao gio tai lai).
+        if os.path.isfile(os.path.join(local_dir, "model.bin")):
+            local_path = local_dir
+            print(f"[*] Dung model '{model_name}' trong tool: {local_dir}")
 
-        # 2) Chua co -> tai thanh FILE THAT vao models/ (KHONG symlink -> ne WinError 1314)
+        # 1) Chua co trong tool -> thu dung lai cache HuggingFace neu day du
+        if local_path is None:
+            try:
+                cached = snapshot_download(repo_id=repo, local_files_only=True)
+                if os.path.isfile(os.path.join(cached, "model.bin")):
+                    local_path = cached
+                    print(f"[*] Dung lai model '{model_name}' tu cache: {cached}")
+            except Exception:
+                pass
+
+        # 2) Chua co o dau -> tai thanh FILE THAT vao models/ (KHONG symlink -> ne WinError 1314)
         if local_path is None:
             print(f"[*] Dang tai model '{model_name}' ({repo}) -> {local_dir}")
             try:

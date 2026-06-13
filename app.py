@@ -226,4 +226,7 @@ with gr.Blocks(title="Speed To Text - SRT tieng Trung") as demo:
     )
 
 if __name__ == "__main__":
-    demo.queue().launch(share=True)
+    # share=True (mac dinh, cho Colab) -> public link *.gradio.live.
+    # Chay local: dat STT_SHARE=0 -> chi mo 127.0.0.1 va tu bat trinh duyet.
+    share = os.environ.get("STT_SHARE", "1") != "0"
+    demo.queue().launch(share=share, inbrowser=not share)

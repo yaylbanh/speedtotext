@@ -25,6 +25,19 @@ Engine: **faster-whisper** (CTranslate2), mặc định model **large-v3** trên
 
 ---
 
+## 💻 Chạy LOCAL trên máy (không cần Colab)
+
+Nếu máy có GPU NVIDIA (vd RTX 3050 6GB) và Python 3.12 đã cài `faster-whisper`:
+
+> Bấm đúp **`run_local.bat`** → tự cài thư viện thiếu → mở `http://127.0.0.1:7860`.
+
+- Chạy bằng GPU của máy, **không phải chờ slot Colab**.
+- File local đọc tức thì, không lo đứt khi upload.
+- Lần đầu tải model large-v3 (~3GB) về máy, sau đó dùng cache.
+- large-v3 (float16) ~3GB VRAM → vừa card 6GB.
+
+---
+
 ## Tính năng
 
 - Chọn model: `large-v3` (xịn nhất), `large-v3-turbo` (nhanh hơn), `medium`.

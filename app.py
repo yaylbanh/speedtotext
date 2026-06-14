@@ -280,8 +280,18 @@ def build_subtitle_lines(segments):
             txt = (seg.text or "").strip()
             if txt:
                 lines.extend(_split_by_text(seg.start, seg.end, txt))
-    # bo dong rong, don dep
-    return [(s, e, t.strip()) for (s, e, t) in lines if t and t.strip()]
+    # don dep: bo dong rong, kep dong dai bat thuong (loi word-timestamp), sua 0 giay
+    out = []
+    for s, e, t in lines:
+        t = (t or "").strip()
+        if not t:
+            continue
+        if e - s > MAX_DUR + 1:   # 1 "tu" bi gan thoi luong qua dai -> kep lai
+            e = s + MAX_DUR
+        if e <= s:                # 0 giay -> cho toi thieu de doc kip
+            e = s + 0.4
+        out.append((s, e, t))
+    return out
 
 # ============================================================
 # 4) HAM CHINH: transcribe -> file .srt + text xem truoc
@@ -294,8 +304,9 @@ def _resolve_source(drive_file, upload_path):
         return os.path.join(DRIVE_INPUT, drive_file)
     return None
 
-def _transcribe_impl(drive_file, upload_path, language, progress=gr.Progress()):
+def _transcribe_impl(drive_file, upload_path, language, init_prompt="", progress=gr.Progress()):
     model_name = MODEL_NAME
+    init_prompt = (init_prompt or "").strip() or None
     audio_path = _resolve_source(drive_file, upload_path)
     if not audio_path:
         raise gr.Error("Chua co file. Chon file tu Drive HOAC upload 1 file audio.")
@@ -313,22 +324,27 @@ def _transcribe_impl(drive_file, upload_path, language, progress=gr.Progress()):
     # MAC DINH non-batched (chinh xac + co word-timestamps de cat cau chuan + khong sot doan).
     # Batched nhanh hon nhung KHONG tra word-timestamps va hay sot/sai -> chi bat khi STT_BATCHED=1.
     use_batched = os.environ.get("STT_BATCHED", "0") == "1"
+    # condition_on_previous_text=False -> tranh loi degenerate/lap lam MAT DOAN
+    common = dict(
+        language=language,
+        word_timestamps=True,
+        condition_on_previous_text=False,
+        initial_prompt=init_prompt,
+    )
+    if init_prompt:
+        print(f"[*] initial_prompt: {init_prompt[:80]}...")
     if use_batched:
         batch_size = max(1, int(os.environ.get("STT_BATCH", "8")))
         try:
             bp = get_batched(model_name)
-            segments, info = bp.transcribe(
-                audio_path, language=language, batch_size=batch_size, word_timestamps=True
-            )
+            segments, info = bp.transcribe(audio_path, batch_size=batch_size, **common)
             print(f"[*] Che do BATCHED (batch_size={batch_size})")
         except Exception as exc:
             print(f"[!] Batched loi ({exc}) -> non-batched")
             use_batched = False
     if not use_batched:
         try:
-            segments, info = model.transcribe(
-                audio_path, language=language, vad_filter=True, word_timestamps=True
-            )
+            segments, info = model.transcribe(audio_path, vad_filter=True, **common)
             print("[*] Che do non-batched + word_timestamps (chinh xac)")
         except Exception as exc2:
             raise gr.Error(f"Loi khi transcribe: {exc2}")
@@ -375,11 +391,11 @@ def _transcribe_impl(drive_file, upload_path, language, progress=gr.Progress()):
     return tmp_srt, preview
 
 
-def transcribe(drive_file, upload_path, language, progress=gr.Progress()):
+def transcribe(drive_file, upload_path, language, init_prompt="", progress=gr.Progress()):
     """Bao toan bo de LOI hien ra UI (Colab giau traceback)."""
     import traceback
     try:
-        return _transcribe_impl(drive_file, upload_path, language, progress)
+        return _transcribe_impl(drive_file, upload_path, language, init_prompt, progress)
     except Exception as exc:
         tb = traceback.format_exc()
         print(tb)
@@ -410,6 +426,11 @@ with gr.Blocks(title="Speed To Text - SRT tieng Trung") as demo:
                 choices=["zh", "vi", "en", "ja", "ko"], value="zh",
                 label="Ngon ngu (zh = tieng Trung)",
             )
+            prompt_in = gr.Textbox(
+                label="Tu khoa phim (giup doc dung ten rieng - cach nhau dau cach)",
+                placeholder="vd: 道宗 魔道 女帝 思过崖 鸿蒙剑体 不朽境 无止境 藏剑山",
+                lines=2,
+            )
             btn = gr.Button("▶ Tao phu de SRT", variant="primary")
         with gr.Column():
             srt_out = gr.File(label="📥 Tai file .srt ve")
@@ -418,7 +439,7 @@ with gr.Blocks(title="Speed To Text - SRT tieng Trung") as demo:
     refresh_btn.click(fn=lambda: gr.update(choices=list_input_files()), outputs=drive_dd)
     btn.click(
         fn=transcribe,
-        inputs=[drive_dd, upload_in, lang_in],
+        inputs=[drive_dd, upload_in, lang_in, prompt_in],
         outputs=[srt_out, preview_out],
     )
 

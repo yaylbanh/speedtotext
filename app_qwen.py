@@ -10,6 +10,7 @@ Pipeline:
 5. Gom timestamp ky tu/tu thanh dong SRT ngan.
 """
 
+import difflib
 import os
 import shutil
 import subprocess
@@ -44,12 +45,14 @@ VAD_PAD_MS = int(os.environ.get("QWEN_VAD_PAD_MS", "250"))
 
 # Cat dong gan cach AIO: dong ngan, uu tien khoang nghi va dau cau.
 MAX_CHARS = int(os.environ.get("STT_MAX_CHARS", "15"))
-TARGET_CHARS = int(os.environ.get("STT_TARGET_CHARS", "9"))
 MAX_DUR = float(os.environ.get("STT_MAX_DUR", "2.8"))
 GAP_SEC = float(os.environ.get("STT_GAP", "0.28"))
 MIN_CHARS = int(os.environ.get("STT_MIN_CHARS", "3"))
-_END_PUNCT = "。！？!?…"
-_BREAK_PUNCT = "。！？!?…，、；,;:："
+_HARD_PUNCT = "。！？!?…；;"
+_SOFT_PUNCT = "，、,：:"
+_ALL_PUNCT = _HARD_PUNCT + _SOFT_PUNCT + "\"'“”‘’（）()【】[]《》<>"
+_HARD_BREAK_MARK = "\x1e"
+_SOFT_BREAK_MARK = "\x1f"
 
 DEFAULT_CONTEXT = (
     "修仙玄幻小说；"
@@ -263,15 +266,101 @@ def _extract_units(results):
     return units
 
 
+def _plain_text(text):
+    return (text or "").replace(_HARD_BREAK_MARK, "").replace(_SOFT_BREAK_MARK, "")
+
+
+def _break_kind(text):
+    if _HARD_BREAK_MARK in (text or ""):
+        return "hard"
+    if _SOFT_BREAK_MARK in (text or ""):
+        return "soft"
+    return None
+
+
+def _merge_break_mark(text, kind):
+    plain = _plain_text(text)
+    if kind == "hard":
+        return plain + _HARD_BREAK_MARK
+    if kind == "soft":
+        return plain + _SOFT_BREAK_MARK
+    return plain
+
+
+def _content_chars(text):
+    return [char for char in (text or "") if not char.isspace() and char not in _ALL_PUNCT]
+
+
+def _apply_transcript_boundaries(units, transcript_text):
+    """Anh xa dau cau trong raw transcript vao unit da co timestamp."""
+    if not units or not transcript_text:
+        return units
+
+    transcript_chars = []
+    transcript_breaks = {}
+    for char in str(transcript_text):
+        if char in _HARD_PUNCT or char in _SOFT_PUNCT:
+            if transcript_chars:
+                kind = "hard" if char in _HARD_PUNCT else "soft"
+                old = transcript_breaks.get(len(transcript_chars) - 1)
+                if old != "hard":
+                    transcript_breaks[len(transcript_chars) - 1] = kind
+            continue
+        if not char.isspace() and char not in _ALL_PUNCT:
+            transcript_chars.append(char)
+
+    unit_chars = []
+    unit_char_owners = []
+    for unit_index, (text, _, _) in enumerate(units):
+        for char in _content_chars(text):
+            unit_chars.append(char)
+            unit_char_owners.append(unit_index)
+
+    if not transcript_chars or not unit_chars or not transcript_breaks:
+        return units
+
+    matcher = difflib.SequenceMatcher(
+        None,
+        "".join(unit_chars),
+        "".join(transcript_chars),
+        autojunk=False,
+    )
+    transcript_to_unit = {}
+    for block in matcher.get_matching_blocks():
+        for offset in range(block.size):
+            transcript_to_unit[block.b + offset] = unit_char_owners[block.a + offset]
+
+    unit_breaks = {}
+    for transcript_index, kind in transcript_breaks.items():
+        unit_index = transcript_to_unit.get(transcript_index)
+        if unit_index is None:
+            # Neu lech 1-2 ky tu, bam vao ky tu khop gan nhat phia truoc.
+            for fallback in range(transcript_index - 1, max(-1, transcript_index - 4), -1):
+                if fallback in transcript_to_unit:
+                    unit_index = transcript_to_unit[fallback]
+                    break
+        if unit_index is None:
+            continue
+        old = unit_breaks.get(unit_index)
+        if old != "hard":
+            unit_breaks[unit_index] = kind
+
+    marked = []
+    for index, (text, start, end) in enumerate(units):
+        marked.append((_merge_break_mark(text, unit_breaks.get(index)), start, end))
+    return marked
+
+
 def _sanitize_units(units):
     """Sap xep, bo timestamp hong va kep unit dai bat thuong."""
     clean = []
     for text, start, end in sorted(units, key=lambda item: (item[1], item[2])):
-        if not text or start < 0:
+        plain = _plain_text(text)
+        if not plain or start < 0:
             continue
         if end <= start:
             end = start + 0.08
-        max_unit_dur = max(1.2, len(text) * 0.75)
+        max_unit_dur = max(1.2, len(plain) * 0.75)
         if end - start > max_unit_dur:
             end = start + max_unit_dur
         clean.append((text, start, end))
@@ -282,13 +371,19 @@ def _dedupe_units(units):
     out = []
     for unit in _sanitize_units(units):
         text, start, end = unit
+        plain = _plain_text(text)
         midpoint = (start + end) / 2
         duplicate = False
-        for old_text, old_start, old_end in reversed(out[-8:]):
+        for old_index in range(len(out) - 1, max(-1, len(out) - 9), -1):
+            old_text, old_start, old_end = out[old_index]
             old_midpoint = (old_start + old_end) / 2
             if old_midpoint < midpoint - 0.4:
                 break
-            if text == old_text and abs(midpoint - old_midpoint) <= 0.18:
+            if _plain_text(old_text) == plain and abs(midpoint - old_midpoint) <= 0.18:
+                old_kind = _break_kind(old_text)
+                new_kind = _break_kind(text)
+                if new_kind == "hard" or (new_kind == "soft" and old_kind is None):
+                    out[old_index] = unit
                 duplicate = True
                 break
         if not duplicate:
@@ -403,7 +498,7 @@ def _find_missing_speech(speech_spans, units, min_gap=MISSING_GAP_SEC):
     for text, start, end in _sanitize_units(units):
         duration = end - start
         # Khong cho mot timestamp loi dai bat thuong che lap ca vung bi mat.
-        max_cover = max(1.0, len(text) * 0.65)
+        max_cover = max(1.0, len(_plain_text(text)) * 0.65)
         if duration > max_cover:
             end = start + max_cover
         covered.append((max(0.0, start - 0.12), end + 0.12))
@@ -464,6 +559,9 @@ def _transcribe_plan(model, normalized_audio, plan, context, work_dir, label):
         return_time_stamps=True,
     )
     units = _extract_units(results)
+    result_item = results[0] if isinstance(results, (list, tuple)) and results else results
+    transcript_text = getattr(result_item, "text", "")
+    units = _apply_transcript_boundaries(units, transcript_text)
     return _offset_and_filter_units(
         units,
         plan["audio_start"],
@@ -484,26 +582,27 @@ def _group_units(units):
             current = []
 
     for text, start, end in _dedupe_units(units):
+        plain = _plain_text(text)
         if current:
             gap = start - current[-1][2]
-            cur_text = "".join(item[0] for item in current)
+            cur_text = "".join(_plain_text(item[0]) for item in current)
             if gap >= GAP_SEC and len(cur_text) >= MIN_CHARS:
                 flush()
 
-        cur_text = "".join(item[0] for item in current)
-        if current and len(cur_text) + len(text) > MAX_CHARS:
+        cur_text = "".join(_plain_text(item[0]) for item in current)
+        if current and len(cur_text) + len(plain) > MAX_CHARS:
             flush()
 
         current.append((text, start, end))
-        joined = "".join(item[0] for item in current)
+        joined = "".join(_plain_text(item[0]) for item in current)
         duration = current[-1][2] - current[0][1]
-        last_char = (text or "").strip()[-1:]
+        break_kind = _break_kind(text)
 
         if (
             len(joined) >= MAX_CHARS
             or duration >= MAX_DUR
-            or (last_char in _END_PUNCT and len(joined) >= MIN_CHARS)
-            or (last_char in _BREAK_PUNCT and len(joined) >= TARGET_CHARS)
+            or (break_kind == "hard" and len(joined) >= MIN_CHARS)
+            or (break_kind == "soft" and len(joined) >= MIN_CHARS)
         ):
             flush()
     flush()
@@ -511,7 +610,7 @@ def _group_units(units):
     lines = []
     previous_end = 0.0
     for group in groups:
-        text = "".join(item[0] for item in group).strip()
+        text = "".join(_plain_text(item[0]) for item in group).strip()
         if not text:
             continue
         start = max(previous_end, group[0][1])

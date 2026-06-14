@@ -176,11 +176,14 @@ def get_batched(model_name):
         _BATCHED_CACHE[model_name] = BatchedInferencePipeline(model=get_model(model_name))
     return _BATCHED_CACHE[model_name]
 
-print("[*] Nap san model mac dinh large-v3...")
-try:
-    get_model("large-v3")
-except Exception as exc:
-    print(f"[!] Khong nap duoc large-v3 luc khoi dong: {exc}")
+# NAP LUOI: mac dinh KHONG nap model luc khoi dong -> UI hien NGAY (khoi cho ~28s).
+# Model nap khi bam "Tao phu de" lan dau. Dat STT_PRELOAD=1 neu muon nap san.
+if os.environ.get("STT_PRELOAD", "0") == "1":
+    print("[*] Nap san model large-v3...")
+    try:
+        get_model("large-v3")
+    except Exception as exc:
+        print(f"[!] Khong nap duoc large-v3 luc khoi dong: {exc}")
 
 # ============================================================
 # 3) format thoi gian SRT

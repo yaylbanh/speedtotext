@@ -58,7 +58,7 @@ import time
 import tempfile
 
 import gradio as gr
-from faster_whisper import WhisperModel
+from faster_whisper import WhisperModel, BatchedInferencePipeline
 from huggingface_hub import snapshot_download
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -167,6 +167,15 @@ def get_model(model_name):
         print(f"[*] Nap xong '{model_name}' trong {time.time()-t0:.1f}s")
     return _MODEL_CACHE[model_name]
 
+# Batched pipeline = chay nhieu doan SONG SONG tren GPU -> nhanh 2-4x,
+# cung model nen chat luong SRT gan nhu khong doi.
+_BATCHED_CACHE = {}
+
+def get_batched(model_name):
+    if model_name not in _BATCHED_CACHE:
+        _BATCHED_CACHE[model_name] = BatchedInferencePipeline(model=get_model(model_name))
+    return _BATCHED_CACHE[model_name]
+
 print("[*] Nap san model mac dinh large-v3...")
 try:
     get_model("large-v3")
@@ -211,10 +220,19 @@ def transcribe(drive_file, upload_path, model_name, language, progress=gr.Progre
 
     progress(0.15, desc="Dang nhan dang giong noi...")
     t0 = time.time()
+    # batch_size: chinh qua env STT_BATCH (8 = an toan ca card 6GB lan T4; T4 co the de 16).
+    batch_size = max(1, int(os.environ.get("STT_BATCH", "8")))
     try:
-        segments, info = model.transcribe(audio_path, language=language, vad_filter=True)
+        # Uu tien BATCHED (nhanh 2-4x, cung model -> chat luong tuong duong)
+        bp = get_batched(model_name)
+        segments, info = bp.transcribe(audio_path, language=language, batch_size=batch_size)
+        print(f"[*] Che do BATCHED (batch_size={batch_size})")
     except Exception as exc:
-        raise gr.Error(f"Loi khi transcribe: {exc}")
+        print(f"[!] Batched loi ({exc}) -> dung che do thuong")
+        try:
+            segments, info = model.transcribe(audio_path, language=language, vad_filter=True)
+        except Exception as exc2:
+            raise gr.Error(f"Loi khi transcribe: {exc2}")
 
     total_dur = float(getattr(info, "duration", 0) or 0)
     srt_lines, preview_lines = [], []

@@ -27,6 +27,8 @@ Silero VAD chia audio thành các đoạn ngắn và phát hiện vùng thoại 
 ## Tính năng
 
 - Qwen chạy từng chunk tối đa 50 giây với `max_new_tokens=4096`.
+- Batch nhiều chunk trong một lần gọi Qwen/ForcedAligner; tự hạ batch nếu GPU thiếu VRAM.
+- Đọc trực tiếp lát WAV bằng SoundFile, không mở FFmpeg riêng cho từng chunk.
 - **Silero VAD** xác định vùng có lời nói; không dùng Whisper để nhận dạng.
 - Timestamp qua **ForcedAligner**, tự phát hiện và retry vùng bị mất lời.
 - Có context thuật ngữ tu tiên mặc định và ô nhập tên riêng của từng phim.
@@ -45,6 +47,7 @@ Silero VAD chia audio thành các đoạn ngắn và phát hiện vùng thoại 
 | `QWEN_LANG` | Chinese | Ngôn ngữ |
 | `QWEN_MAX_NEW_TOKENS` | 4096 | Giới hạn output cho mỗi chunk |
 | `QWEN_CHUNK_SEC` | 50 | Thời lượng tối đa của chunk đầu |
+| `QWEN_PROCESS_BATCH` | 4 | Số chunk xử lý trong một lần gọi model |
 | `QWEN_RETRY_CHUNK_SEC` | 20 | Chunk dùng khi chạy lại vùng thiếu |
 | `QWEN_RETRY_ROUNDS` | 2 | Số vòng chia nhỏ và retry |
 | `QWEN_MISSING_GAP` | 1.5 | Khoảng thoại trống tối thiểu để retry |

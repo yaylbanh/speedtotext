@@ -99,6 +99,76 @@ class QwenPipelineTests(unittest.TestCase):
         lines = app_qwen._group_units(units)
         self.assertEqual(["我是长老", "却和女帝相爱"], [text for _, _, text in lines])
 
+    def test_batch_transcription_preserves_plan_order(self):
+        plans = [
+            {"audio_start": 0.0, "audio_end": 5.0, "core_start": 0.0, "core_end": 5.0},
+            {"audio_start": 5.0, "audio_end": 10.0, "core_start": 5.0, "core_end": 10.0},
+        ]
+        results = [
+            SimpleNamespace(
+                text="第一。",
+                time_stamps=SimpleNamespace(
+                    items=[SimpleNamespace(text="第一", start_time=0.1, end_time=1.0)]
+                ),
+            ),
+            SimpleNamespace(
+                text="第二。",
+                time_stamps=SimpleNamespace(
+                    items=[SimpleNamespace(text="第二", start_time=0.2, end_time=1.1)]
+                ),
+            ),
+        ]
+
+        class FakeBatchModel:
+            def transcribe(self, audio, context, language, return_time_stamps):
+                self.batch_size = len(audio)
+                return results
+
+        model = FakeBatchModel()
+        units = app_qwen._transcribe_batch_inputs(
+            model,
+            [("audio-1", 16000), ("audio-2", 16000)],
+            plans,
+            "context",
+        )
+        self.assertEqual(2, model.batch_size)
+        self.assertEqual(["第一", "第二"], [app_qwen._plain_text(x[0]) for x in units])
+        self.assertAlmostEqual(5.2, units[1][1])
+
+    def test_batch_failure_falls_back_to_single_items(self):
+        plans = [
+            {"audio_start": 0.0, "audio_end": 5.0, "core_start": 0.0, "core_end": 5.0},
+            {"audio_start": 5.0, "audio_end": 10.0, "core_start": 5.0, "core_end": 10.0},
+        ]
+
+        class FallbackModel:
+            def __init__(self):
+                self.calls = []
+
+            def transcribe(self, audio, context, language, return_time_stamps):
+                self.calls.append(len(audio))
+                if len(audio) > 1:
+                    raise RuntimeError("out of memory")
+                text = "甲" if audio[0][0] == "audio-1" else "乙"
+                return [
+                    SimpleNamespace(
+                        text=text + "。",
+                        time_stamps=SimpleNamespace(
+                            items=[SimpleNamespace(text=text, start_time=0.1, end_time=0.5)]
+                        ),
+                    )
+                ]
+
+        model = FallbackModel()
+        units = app_qwen._transcribe_batch_inputs(
+            model,
+            [("audio-1", 16000), ("audio-2", 16000)],
+            plans,
+            "context",
+        )
+        self.assertEqual([2, 1, 1], model.calls)
+        self.assertEqual(["甲", "乙"], [app_qwen._plain_text(x[0]) for x in units])
+
 
 if __name__ == "__main__":
     unittest.main()

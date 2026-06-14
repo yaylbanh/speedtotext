@@ -35,6 +35,7 @@ MAX_NEW_TOKENS = int(os.environ.get("QWEN_MAX_NEW_TOKENS", "4096"))
 SAMPLE_RATE = 16000
 CHUNK_SEC = float(os.environ.get("QWEN_CHUNK_SEC", "50"))
 CHUNK_OVERLAP_SEC = float(os.environ.get("QWEN_CHUNK_OVERLAP", "1.0"))
+PROCESS_BATCH_SIZE = int(os.environ.get("QWEN_PROCESS_BATCH", "4"))
 RETRY_CHUNK_SEC = float(os.environ.get("QWEN_RETRY_CHUNK_SEC", "20"))
 RETRY_ROUNDS = int(os.environ.get("QWEN_RETRY_ROUNDS", "2"))
 MISSING_GAP_SEC = float(os.environ.get("QWEN_MISSING_GAP", "1.5"))
@@ -570,6 +571,121 @@ def _transcribe_plan(model, normalized_audio, plan, context, work_dir, label):
     )
 
 
+def _read_plan_audio_batch(normalized_audio, plans):
+    """Doc truc tiep cac lat WAV, khong khoi dong FFmpeg cho tung chunk."""
+    try:
+        import numpy as np
+        import soundfile as sf
+    except ImportError as exc:
+        raise RuntimeError("Thieu numpy/soundfile de doc audio batch.") from exc
+
+    audio_inputs = []
+    with sf.SoundFile(normalized_audio, mode="r") as handle:
+        if handle.samplerate != SAMPLE_RATE:
+            raise RuntimeError(
+                f"Audio batch phai la {SAMPLE_RATE} Hz, nhung nhan {handle.samplerate} Hz."
+            )
+        for plan in plans:
+            start_frame = max(0, int(round(plan["audio_start"] * SAMPLE_RATE)))
+            frame_count = max(
+                1,
+                int(round((plan["audio_end"] - plan["audio_start"]) * SAMPLE_RATE)),
+            )
+            handle.seek(start_frame)
+            samples = handle.read(frame_count, dtype="float32", always_2d=False)
+            if getattr(samples, "ndim", 1) > 1:
+                samples = samples.mean(axis=1)
+            audio_inputs.append((np.ascontiguousarray(samples), SAMPLE_RATE))
+    return audio_inputs
+
+
+def _result_to_plan_units(result, plan):
+    units = _extract_units(result)
+    transcript_text = getattr(result, "text", "")
+    units = _apply_transcript_boundaries(units, transcript_text)
+    return _offset_and_filter_units(
+        units,
+        plan["audio_start"],
+        plan["core_start"],
+        plan["core_end"],
+    )
+
+
+def _transcribe_batch_inputs(model, audio_inputs, plans, context):
+    """Batch Qwen; neu GPU khong du VRAM thi tu chia doi den batch=1."""
+    try:
+        results = model.transcribe(
+            audio=audio_inputs,
+            context=[context] * len(audio_inputs),
+            language=[LANG] * len(audio_inputs),
+            return_time_stamps=True,
+        )
+        if len(results) != len(plans):
+            raise RuntimeError(
+                f"Qwen tra {len(results)} ket qua cho {len(plans)} audio chunk."
+            )
+        out = []
+        for result, plan in zip(results, plans):
+            out.extend(_result_to_plan_units(result, plan))
+        return out
+    except Exception as exc:
+        if len(plans) <= 1:
+            raise
+        print(
+            f"[!] Batch {len(plans)} chunk loi ({exc}) -> tu chia batch nho hon",
+            flush=True,
+        )
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        middle = len(plans) // 2
+        return _transcribe_batch_inputs(
+            model,
+            audio_inputs[:middle],
+            plans[:middle],
+            context,
+        ) + _transcribe_batch_inputs(
+            model,
+            audio_inputs[middle:],
+            plans[middle:],
+            context,
+        )
+
+
+def _transcribe_plans_batched(
+    model,
+    normalized_audio,
+    plans,
+    context,
+    progress,
+    progress_start,
+    progress_span,
+    description,
+):
+    units = []
+    batch_size = max(1, PROCESS_BATCH_SIZE)
+    total_batches = max(1, (len(plans) + batch_size - 1) // batch_size)
+    for batch_index, offset in enumerate(range(0, len(plans), batch_size), 1):
+        batch_plans = plans[offset:offset + batch_size]
+        first_chunk = offset + 1
+        last_chunk = offset + len(batch_plans)
+        progress(
+            progress_start + progress_span * batch_index / total_batches,
+            desc=(
+                f"{description} {first_chunk}-{last_chunk}/{len(plans)} "
+                f"(batch={len(batch_plans)})..."
+            ),
+        )
+        audio_inputs = _read_plan_audio_batch(normalized_audio, batch_plans)
+        units.extend(
+            _transcribe_batch_inputs(model, audio_inputs, batch_plans, context)
+        )
+    return units
+
+
 # ====== Cat dong SRT ======
 def _group_units(units):
     groups = []
@@ -648,21 +764,18 @@ def _transcribe_impl(drive_file, upload_path, user_context, progress):
         context = _compose_context(user_context)
         units = []
 
-        for index, plan in enumerate(plans, 1):
-            progress(
-                0.12 + 0.58 * index / len(plans),
-                desc=f"Qwen dang xu ly chunk {index}/{len(plans)}...",
+        units.extend(
+            _transcribe_plans_batched(
+                model,
+                normalized_audio,
+                plans,
+                context,
+                progress,
+                progress_start=0.12,
+                progress_span=0.58,
+                description="Qwen dang xu ly chunk",
             )
-            units.extend(
-                _transcribe_plan(
-                    model,
-                    normalized_audio,
-                    plan,
-                    context,
-                    work_dir,
-                    f"base_{index:03d}",
-                )
-            )
+        )
         units = _dedupe_units(units)
 
         initial_missing = _find_missing_speech(speech_spans, units)
@@ -673,25 +786,19 @@ def _transcribe_impl(drive_file, upload_path, user_context, progress):
                 break
             retry_max_sec = max(6.0, RETRY_CHUNK_SEC / (2 ** retry_round))
             retry_plans = _build_retry_plans(missing, total_duration, retry_max_sec)
-            for index, plan in enumerate(retry_plans, 1):
-                progress(
-                    0.72 + 0.18 * index / max(1, len(retry_plans)),
-                    desc=(
-                        f"Retry Qwen vung thieu, vong {retry_round + 1}: "
-                        f"{index}/{len(retry_plans)}..."
-                    ),
+            units.extend(
+                _transcribe_plans_batched(
+                    model,
+                    normalized_audio,
+                    retry_plans,
+                    context,
+                    progress,
+                    progress_start=0.72,
+                    progress_span=0.18,
+                    description=f"Retry Qwen vong {retry_round + 1}",
                 )
-                units.extend(
-                    _transcribe_plan(
-                        model,
-                        normalized_audio,
-                        plan,
-                        context,
-                        work_dir,
-                        f"retry_{retry_round + 1}_{index:03d}",
-                    )
-                )
-                retry_count += 1
+            )
+            retry_count += len(retry_plans)
             units = _dedupe_units(units)
             missing = _find_missing_speech(speech_spans, units)
 
@@ -733,7 +840,10 @@ def _transcribe_impl(drive_file, upload_path, user_context, progress):
 
         status = [
             f"Engine: Qwen3-ASR-1.7B | max_new_tokens={MAX_NEW_TOKENS}",
-            f"VAD: {len(speech_spans)} vung thoai | chunk Qwen: {len(plans)}",
+            (
+                f"VAD: {len(speech_spans)} vung thoai | chunk Qwen: {len(plans)} "
+                f"| process_batch={PROCESS_BATCH_SIZE}"
+            ),
             f"Retry Qwen: {retry_count} chunk",
             f"Do phu timeline thoai: {coverage:.2f}%",
             f"Con lai {len(missing)} khoang thieu >= {MISSING_GAP_SEC:.1f}s",

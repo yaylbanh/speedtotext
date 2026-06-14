@@ -195,6 +195,82 @@ def fmt_ts(seconds):
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 # ============================================================
+# 3b) CAT DONG NGAN cho phu de (theo dau cau + do dai + thoi luong)
+# ============================================================
+import re
+
+MAX_CHARS = int(os.environ.get("STT_MAX_CHARS", "20"))   # toi da ky tu / dong
+MAX_DUR = float(os.environ.get("STT_MAX_DUR", "7"))       # toi da giay / dong
+_END_PUNCT = "。！？!?…"
+_BREAK_PUNCT = "。！？!?…，、；,;:："
+
+
+def _split_by_words(words):
+    """Cat 1 segment thanh nhieu dong dua tren word-timestamps (timing chuan)."""
+    lines, cur = [], []
+    for w in words:
+        cur.append(w)
+        text = "".join(x.word for x in cur).strip()
+        dur = cur[-1].end - cur[0].start
+        last_char = (w.word or "").strip()[-1:]
+        if len(text) >= MAX_CHARS or dur >= MAX_DUR or last_char in _END_PUNCT:
+            lines.append((cur[0].start, cur[-1].end, text))
+            cur = []
+    if cur:
+        lines.append((cur[0].start, cur[-1].end, "".join(x.word for x in cur).strip()))
+    return lines
+
+
+def _split_by_text(start, end, text):
+    """Khong co word-timestamps: cat theo dau cau + CAT CUNG theo do dai (khi khong co dau cau),
+    chia thoi gian theo do dai (gan dung)."""
+    parts = [p.strip() for p in re.split(r"(?<=[" + _BREAK_PUNCT + r"])", text) if p.strip()]
+    if not parts:
+        parts = [text]
+    # cat cung cac doan dai qua MAX_CHARS (tieng Trung khong co dau cau)
+    wrapped = []
+    for p in parts:
+        while len(p) > MAX_CHARS:
+            wrapped.append(p[:MAX_CHARS])
+            p = p[MAX_CHARS:]
+        if p:
+            wrapped.append(p)
+    # gop lai cho gan MAX_CHARS
+    chunks, cur = [], ""
+    for p in wrapped:
+        if cur and len(cur) + len(p) > MAX_CHARS:
+            chunks.append(cur)
+            cur = p
+        else:
+            cur += p
+    if cur:
+        chunks.append(cur)
+    if not chunks:
+        chunks = [text]
+    total = sum(len(c) for c in chunks) or 1
+    out, t, dur = [], start, max(0.0, end - start)
+    for c in chunks:
+        seg = dur * len(c) / total
+        out.append((t, t + seg, c))
+        t += seg
+    return out
+
+
+def build_subtitle_lines(segments):
+    """Tra ve list (start, end, text) la cac dong phu de NGAN."""
+    lines = []
+    for seg in segments:
+        words = getattr(seg, "words", None)
+        if words:
+            lines.extend(_split_by_words(words))
+        else:
+            txt = (seg.text or "").strip()
+            if txt:
+                lines.extend(_split_by_text(seg.start, seg.end, txt))
+    # bo dong rong, don dep
+    return [(s, e, t.strip()) for (s, e, t) in lines if t and t.strip()]
+
+# ============================================================
 # 4) HAM CHINH: transcribe -> file .srt + text xem truoc
 # ============================================================
 def _resolve_source(drive_file, upload_path):
@@ -223,32 +299,31 @@ def transcribe(drive_file, upload_path, language, progress=gr.Progress()):
     t0 = time.time()
     # batch_size: chinh qua env STT_BATCH (8 = an toan ca card 6GB lan T4; T4 co the de 16).
     batch_size = max(1, int(os.environ.get("STT_BATCH", "8")))
+    # word_timestamps=True -> co timing tung tu de cat dong NGAN chuan
     try:
         # Uu tien BATCHED (nhanh 2-4x, cung model -> chat luong tuong duong)
         bp = get_batched(model_name)
-        segments, info = bp.transcribe(audio_path, language=language, batch_size=batch_size)
-        print(f"[*] Che do BATCHED (batch_size={batch_size})")
+        segments, info = bp.transcribe(
+            audio_path, language=language, batch_size=batch_size, word_timestamps=True
+        )
+        print(f"[*] Che do BATCHED (batch_size={batch_size}), word_timestamps")
     except Exception as exc:
-        print(f"[!] Batched loi ({exc}) -> dung che do thuong")
+        print(f"[!] Batched/word_timestamps loi ({exc}) -> dung che do thuong")
         try:
-            segments, info = model.transcribe(audio_path, language=language, vad_filter=True)
+            segments, info = model.transcribe(
+                audio_path, language=language, vad_filter=True, word_timestamps=True
+            )
         except Exception as exc2:
             raise gr.Error(f"Loi khi transcribe: {exc2}")
 
-    total_dur = float(getattr(info, "duration", 0) or 0)
+    progress(0.85, desc="Cat dong phu de...")
+    lines = build_subtitle_lines(segments)  # list (start, end, text) - da cat ngan
+
     srt_lines, preview_lines = [], []
-    idx = 1
-    for seg in segments:
-        text = (seg.text or "").strip()
-        if not text:
-            continue
-        start, end = fmt_ts(seg.start), fmt_ts(seg.end)
+    for idx, (start_s, end_s, text) in enumerate(lines, 1):
+        start, end = fmt_ts(start_s), fmt_ts(end_s)
         srt_lines.append(f"{idx}\n{start} --> {end}\n{text}\n")
         preview_lines.append(f"{start} -> {end}  {text}")
-        idx += 1
-        if total_dur > 0:
-            p = min(0.95, 0.15 + 0.8 * (float(seg.end) / total_dur))
-            progress(p, desc=f"Dong {idx} ... {start}")
 
     if not srt_lines:
         raise gr.Error("Khong nhan dang duoc noi dung nao (audio rong/khong co tieng noi?).")

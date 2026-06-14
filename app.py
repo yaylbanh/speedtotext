@@ -310,22 +310,26 @@ def _transcribe_impl(drive_file, upload_path, language, progress=gr.Progress()):
 
     progress(0.15, desc="Dang nhan dang giong noi...")
     t0 = time.time()
-    # batch_size: chinh qua env STT_BATCH (8 = an toan ca card 6GB lan T4; T4 co the de 16).
-    batch_size = max(1, int(os.environ.get("STT_BATCH", "8")))
-    # word_timestamps=True -> co timing tung tu de cat dong NGAN chuan
-    try:
-        # Uu tien BATCHED (nhanh 2-4x, cung model -> chat luong tuong duong)
-        bp = get_batched(model_name)
-        segments, info = bp.transcribe(
-            audio_path, language=language, batch_size=batch_size, word_timestamps=True
-        )
-        print(f"[*] Che do BATCHED (batch_size={batch_size}), word_timestamps")
-    except Exception as exc:
-        print(f"[!] Batched/word_timestamps loi ({exc}) -> dung che do thuong")
+    # MAC DINH non-batched (chinh xac + co word-timestamps de cat cau chuan + khong sot doan).
+    # Batched nhanh hon nhung KHONG tra word-timestamps va hay sot/sai -> chi bat khi STT_BATCHED=1.
+    use_batched = os.environ.get("STT_BATCHED", "0") == "1"
+    if use_batched:
+        batch_size = max(1, int(os.environ.get("STT_BATCH", "8")))
+        try:
+            bp = get_batched(model_name)
+            segments, info = bp.transcribe(
+                audio_path, language=language, batch_size=batch_size, word_timestamps=True
+            )
+            print(f"[*] Che do BATCHED (batch_size={batch_size})")
+        except Exception as exc:
+            print(f"[!] Batched loi ({exc}) -> non-batched")
+            use_batched = False
+    if not use_batched:
         try:
             segments, info = model.transcribe(
                 audio_path, language=language, vad_filter=True, word_timestamps=True
             )
+            print("[*] Che do non-batched + word_timestamps (chinh xac)")
         except Exception as exc2:
             raise gr.Error(f"Loi khi transcribe: {exc2}")
 
@@ -387,7 +391,7 @@ def transcribe(drive_file, upload_path, language, progress=gr.Progress()):
 with gr.Blocks(title="Speed To Text - SRT tieng Trung") as demo:
     gr.Markdown(
         "# 🎙️ Speed To Text → SRT\n"
-        f"*(Model: **large-v3** (xin nhat) | Che do: **Batched** | Thiet bi: **{DEVICE.upper()}** | "
+        f"*(Model: **large-v3** (xin nhat) | Thiet bi: **{DEVICE.upper()}** | "
         f"Drive: **{'da mount' if drive_mounted() else 'chua mount'}**)*\n\n"
         + (f"Bo file audio vao Google Drive: `MyDrive/STT_input/` roi bam **Lam moi** de chon.\n"
            f"SRT se xuat ra `MyDrive/STT_output/`."

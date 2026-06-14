@@ -2,8 +2,8 @@
 
 Trích phụ đề `.srt` tiếng Trung từ audio/video, tối ưu cho phim **tu tiên / huyền huyễn**.
 
-Engine chính: **Qwen3-ASR-1.7B** — model nhận dạng giọng nói **SOTA 2026**, chính xác tiếng Trung
-hơn Whisper nhiều (WER ~thấp hơn 2-3 lần), kèm **Qwen3-ForcedAligner** để lấy timestamp làm phụ đề.
+Engine chính: **Qwen3-ASR-1.7B**, kèm **Qwen3-ForcedAligner** để lấy timestamp.
+Silero VAD chia audio thành các đoạn ngắn và phát hiện vùng thoại Qwen bỏ sót để tự chạy lại.
 
 ---
 
@@ -14,7 +14,7 @@ hơn Whisper nhiều (WER ~thấp hơn 2-3 lần), kèm **Qwen3-ForcedAligner** 
 1. Bấm badge **Open in Colab** ở trên (mở `run_colab_qwen.ipynb`).
 2. `Runtime → Change runtime type → GPU T4 → Save`.
 3. Bấm ▶ chạy ô code → **Accept** Google Drive.
-4. Lần đầu cài `qwen-asr` + tải model (~vài GB) — chậm, kiên nhẫn; lần sau nhanh.
+4. Lần đầu cài `qwen-asr`, `silero-vad` + tải model (~vài GB) — chậm; lần sau nhanh.
 5. Giao diện hiện **ngay trong ô Colab**:
    - Bỏ file audio/video vào `MyDrive/STT_input/` → bấm **🔄 Làm mới** → chọn file.
    - Hoặc upload trực tiếp (file nhỏ).
@@ -26,9 +26,12 @@ hơn Whisper nhiều (WER ~thấp hơn 2-3 lần), kèm **Qwen3-ForcedAligner** 
 
 ## Tính năng
 
-- **Qwen3-ASR-1.7B** (SOTA tiếng Trung) → đọc đúng thuật ngữ tu tiên hơn hẳn Whisper.
-- Timestamp qua **ForcedAligner** → phụ đề khớp thoại.
-- Tự **cắt dòng ngắn** (theo dấu câu / độ dài / khoảng nghỉ), lọc dòng lỗi.
+- Qwen chạy từng chunk tối đa 50 giây với `max_new_tokens=4096`.
+- **Silero VAD** xác định vùng có lời nói; không dùng Whisper để nhận dạng.
+- Timestamp qua **ForcedAligner**, tự phát hiện và retry vùng bị mất lời.
+- Có context thuật ngữ tu tiên mặc định và ô nhập tên riêng của từng phim.
+- Tự cắt dòng ngắn gần cách AIO, theo dấu câu, độ dài và khoảng nghỉ.
+- Hiển thị phần trăm coverage cùng các khoảng thoại còn thiếu.
 - Đọc/ghi qua Google Drive (file lớn khỏi upload web).
 - Lỗi hiện thẳng trên giao diện để dễ xử lý.
 
@@ -36,10 +39,16 @@ hơn Whisper nhiều (WER ~thấp hơn 2-3 lần), kèm **Qwen3-ForcedAligner** 
 
 | Env | Mặc định | Ý nghĩa |
 |-----|----------|---------|
-| `STT_MAX_CHARS` | 20 | Tối đa ký tự / dòng |
-| `STT_MAX_DUR` | 7 | Tối đa giây / dòng |
-| `STT_GAP` | 0.4 | Khoảng nghỉ (giây) thì ngắt dòng |
+| `STT_MAX_CHARS` | 15 | Tối đa ký tự / dòng |
+| `STT_TARGET_CHARS` | 9 | Độ dài mục tiêu trước điểm ngắt tự nhiên |
+| `STT_MAX_DUR` | 2.8 | Tối đa giây / dòng |
+| `STT_GAP` | 0.28 | Khoảng nghỉ (giây) thì ngắt dòng |
 | `QWEN_LANG` | Chinese | Ngôn ngữ |
+| `QWEN_MAX_NEW_TOKENS` | 4096 | Giới hạn output cho mỗi chunk |
+| `QWEN_CHUNK_SEC` | 50 | Thời lượng tối đa của chunk đầu |
+| `QWEN_RETRY_CHUNK_SEC` | 20 | Chunk dùng khi chạy lại vùng thiếu |
+| `QWEN_RETRY_ROUNDS` | 2 | Số vòng chia nhỏ và retry |
+| `QWEN_MISSING_GAP` | 1.5 | Khoảng thoại trống tối thiểu để retry |
 
 ## Cấu trúc
 

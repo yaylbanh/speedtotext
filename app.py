@@ -62,7 +62,12 @@ from faster_whisper import WhisperModel
 from huggingface_hub import snapshot_download
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-MODELS_DIR = os.path.join(APP_DIR, "models")
+# Tren Colab (da mount Drive) -> luu model vao Drive de KHONG phai tai lai moi phien
+# (Colab xoa sach khi tat). Local -> luu trong thu muc tool.
+if os.path.isdir("/content/drive/MyDrive"):
+    MODELS_DIR = "/content/drive/MyDrive/STT_models"
+else:
+    MODELS_DIR = os.path.join(APP_DIR, "models")
 
 # ============================================================
 # 0) THU MUC GOOGLE DRIVE (neu da mount o notebook)

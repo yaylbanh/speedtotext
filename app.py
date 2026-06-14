@@ -116,9 +116,9 @@ print(f"[*] Thiet bi: device={DEVICE} | compute_type={COMPUTE_TYPE}")
 # 2) NAP MODEL MOT LAN (cache theo ten, khong nap trung)
 # ============================================================
 MODEL_MAP = {
-    "large-v3": "large-v3",
+    "large-v3": "Systran/faster-whisper-large-v3",
     "large-v3-turbo": "deepdml/faster-whisper-large-v3-turbo-ct2",
-    "medium": "medium",
+    "medium": "Systran/faster-whisper-medium",
 }
 _MODEL_CACHE = {}
 

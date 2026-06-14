@@ -201,14 +201,24 @@ import re
 
 MAX_CHARS = int(os.environ.get("STT_MAX_CHARS", "20"))   # toi da ky tu / dong
 MAX_DUR = float(os.environ.get("STT_MAX_DUR", "7"))       # toi da giay / dong
+GAP_SEC = float(os.environ.get("STT_GAP", "0.4"))         # khoang nghi >= bao nhieu giay thi ngat dong
+MIN_CHARS = int(os.environ.get("STT_MIN_CHARS", "4"))     # dong ngan hon thi khong ngat o khoang nghi (tranh vun)
 _END_PUNCT = "。！？!?…"
 _BREAK_PUNCT = "。！？!?…，、；,;:："
 
 
 def _split_by_words(words):
-    """Cat 1 segment thanh nhieu dong dua tren word-timestamps (timing chuan)."""
+    """Cat 1 segment thanh nhieu dong dua tren word-timestamps (timing chuan).
+    Uu tien ngat o KHOANG NGHI tu nhien giua cac tu (im lang) -> khop nhip noi."""
     lines, cur = [], []
     for w in words:
+        # Co khoang nghi lon truoc tu nay -> ngat dong tai diem nghi (neu da du dai toi thieu)
+        if cur:
+            gap = float(w.start) - float(cur[-1].end)
+            cur_len = len("".join(x.word for x in cur).strip())
+            if gap >= GAP_SEC and cur_len >= MIN_CHARS:
+                lines.append((cur[0].start, cur[-1].end, "".join(x.word for x in cur).strip()))
+                cur = []
         cur.append(w)
         text = "".join(x.word for x in cur).strip()
         dur = cur[-1].end - cur[0].start

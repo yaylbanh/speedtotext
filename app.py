@@ -304,9 +304,24 @@ def _resolve_source(drive_file, upload_path):
         return os.path.join(DRIVE_INPUT, drive_file)
     return None
 
+# Tu vung TU TIEN (xianxia/huyen huyen) dung san -> Whisper doc dung thuat ngu,
+# nguoi dung khong can biet tieng Trung. Co the sua/them trong o tren UI.
+DEFAULT_PROMPT = (
+    "修仙玄幻小说。修炼,修为,境界,灵气,灵力,真元,元神,神识,道行;"
+    "炼气,筑基,金丹,元婴,化神,炼虚,合体,大乘,渡劫,飞升,半步,巅峰,"
+    "不朽境,无始境,无止境,半圣,大帝,圣境;"
+    "宗门,道宗,魔道,仙门,圣地,家族,长老,掌门,宗主,弟子,师尊,师父,师兄,师姐,师妹,师弟;"
+    "功法,神通,法术,秘法,法宝,飞剑,剑修,剑气,剑意,丹药,灵丹,灵石,体质,天赋,血脉,觉醒,传承;"
+    "妖兽,凶兽,神兽,神龙,妖孽,天才,废物,女帝,魔尊,仙帝,帝尊,天道,鸿蒙,紫气,本命,"
+    "肉身不灭,亘古不朽,惊天动地,一剑斩之;"
+    "系统,宿主,绑定,签到,奖励,任务,穿越者,金手指,开挂。"
+)
+
+
 def _transcribe_impl(drive_file, upload_path, language, init_prompt="", progress=gr.Progress()):
     model_name = MODEL_NAME
-    init_prompt = (init_prompt or "").strip() or None
+    # Trong thi dung tu vung tu tien mac dinh
+    init_prompt = (init_prompt or "").strip() or DEFAULT_PROMPT
     audio_path = _resolve_source(drive_file, upload_path)
     if not audio_path:
         raise gr.Error("Chua co file. Chon file tu Drive HOAC upload 1 file audio.")
@@ -427,8 +442,8 @@ with gr.Blocks(title="Speed To Text - SRT tieng Trung") as demo:
                 label="Ngon ngu (zh = tieng Trung)",
             )
             prompt_in = gr.Textbox(
-                label="Tu khoa phim (giup doc dung ten rieng - cach nhau dau cach)",
-                placeholder="vd: 道宗 魔道 女帝 思过崖 鸿蒙剑体 不朽境 无止境 藏剑山",
+                label="Tu khoa (DE TRONG = tu dung tu vung TU TIEN co san). Co the dan them ten rieng cua phim.",
+                placeholder="De trong cung duoc. Muon them ten rieng phim thi dan vao day (vd ten nhan vat, mon phai).",
                 lines=2,
             )
             btn = gr.Button("▶ Tao phu de SRT", variant="primary")

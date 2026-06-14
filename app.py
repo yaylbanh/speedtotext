@@ -120,10 +120,10 @@ print(f"[*] Thiet bi: device={DEVICE} | compute_type={COMPUTE_TYPE}")
 # ============================================================
 # 2) NAP MODEL MOT LAN (cache theo ten, khong nap trung)
 # ============================================================
+# Chi dung model XIN NHAT: large-v3.
+MODEL_NAME = "large-v3"
 MODEL_MAP = {
     "large-v3": "Systran/faster-whisper-large-v3",
-    "large-v3-turbo": "deepdml/faster-whisper-large-v3-turbo-ct2",
-    "medium": "Systran/faster-whisper-medium",
 }
 _MODEL_CACHE = {}
 
@@ -205,7 +205,8 @@ def _resolve_source(drive_file, upload_path):
         return os.path.join(DRIVE_INPUT, drive_file)
     return None
 
-def transcribe(drive_file, upload_path, model_name, language, progress=gr.Progress()):
+def transcribe(drive_file, upload_path, language, progress=gr.Progress()):
+    model_name = MODEL_NAME
     audio_path = _resolve_source(drive_file, upload_path)
     if not audio_path:
         raise gr.Error("Chua co file. Chon file tu Drive HOAC upload 1 file audio.")
@@ -286,7 +287,8 @@ def transcribe(drive_file, upload_path, model_name, language, progress=gr.Progre
 with gr.Blocks(title="Speed To Text - SRT tieng Trung") as demo:
     gr.Markdown(
         "# 🎙️ Speed To Text → SRT\n"
-        f"*(Thiet bi: **{DEVICE.upper()}** | Drive: **{'da mount' if drive_mounted() else 'chua mount'}**)*\n\n"
+        f"*(Model: **large-v3** (xin nhat) | Che do: **Batched** | Thiet bi: **{DEVICE.upper()}** | "
+        f"Drive: **{'da mount' if drive_mounted() else 'chua mount'}**)*\n\n"
         + (f"Bo file audio vao Google Drive: `MyDrive/STT_input/` roi bam **Lam moi** de chon.\n"
            f"SRT se xuat ra `MyDrive/STT_output/`."
            if drive_mounted()
@@ -300,10 +302,6 @@ with gr.Blocks(title="Speed To Text - SRT tieng Trung") as demo:
             )
             refresh_btn = gr.Button("🔄 Lam moi danh sach Drive", size="sm")
             upload_in = gr.Audio(type="filepath", label="… hoac Upload truc tiep (file nho)")
-            model_in = gr.Dropdown(
-                choices=["large-v3", "large-v3-turbo", "medium"], value="large-v3",
-                label="Model (large-v3 = xin nhat)",
-            )
             lang_in = gr.Dropdown(
                 choices=["zh", "vi", "en", "ja", "ko"], value="zh",
                 label="Ngon ngu (zh = tieng Trung)",
@@ -316,7 +314,7 @@ with gr.Blocks(title="Speed To Text - SRT tieng Trung") as demo:
     refresh_btn.click(fn=lambda: gr.update(choices=list_input_files()), outputs=drive_dd)
     btn.click(
         fn=transcribe,
-        inputs=[drive_dd, upload_in, model_in, lang_in],
+        inputs=[drive_dd, upload_in, lang_in],
         outputs=[srt_out, preview_out],
     )
 

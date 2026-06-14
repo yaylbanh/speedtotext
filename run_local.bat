@@ -20,8 +20,15 @@ if not defined PYCMD (
 )
 
 echo [*] Python: %PYCMD%
-echo [*] Dang kiem tra/cai thu vien (faster-whisper, gradio)...
-%PYCMD% -m pip install -q -r requirements.txt
+
+REM Chi cai khi THIEU thu vien (khoi cai lai moi lan -> mo nhanh)
+%PYCMD% -c "import faster_whisper, gradio, ctranslate2; import importlib.util as u; assert u.find_spec('nvidia.cublas') and u.find_spec('nvidia.cudnn') and u.find_spec('nvidia.cuda_runtime')" >nul 2>&1
+if errorlevel 1 (
+  echo [*] Thieu thu vien -^> dang cai dat lan dau...
+  %PYCMD% -m pip install -q -r requirements.txt
+) else (
+  echo [*] Thu vien da day du -^> bo qua cai dat.
+)
 
 echo.
 echo [*] Khoi dong Speed To Text (chay LOCAL tren GPU cua may ban)...

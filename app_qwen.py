@@ -86,39 +86,41 @@ def get_model():
 
 # ====== Lay 'units' (text + start + end) tu ket qua Qwen, du cau truc nao ======
 def _extract_units(results):
-    """Tra ve list (text, start, end). Robust voi nhieu kha nang cau truc."""
+    """Tra ve list (text, start, end) tu ket qua Qwen3-ASR.
+    Cau truc: results[0].time_stamps.items = [ForcedAlignItem(text, start_time, end_time), ...]"""
     units = []
-
-    def add(text, start, end):
-        text = (str(text) if text is not None else "").strip()
-        if text and start is not None and end is not None:
-            units.append((text, float(start), float(end)))
-
-    # results thuong la list theo tung audio -> lay phan tu 0
     item = results[0] if isinstance(results, (list, tuple)) and results else results
 
-    # 1) item la list cac segment co .text/.start_time/.end_time
+    # Tim chuoi cac don vi co timestamp
     seq = None
-    if isinstance(item, (list, tuple)):
-        seq = item
-    else:
-        for attr in ("timestamps", "segments", "words", "chunks"):
-            v = getattr(item, attr, None)
-            if v:
-                seq = v
-                break
-    if seq:
-        for s in seq:
-            t = getattr(s, "text", None)
-            if t is None and isinstance(s, dict):
-                t = s.get("text")
-            st = getattr(s, "start_time", getattr(s, "start", None))
-            en = getattr(s, "end_time", getattr(s, "end", None))
-            if st is None and isinstance(s, dict):
-                st = s.get("start_time", s.get("start"))
-            if en is None and isinstance(s, dict):
-                en = s.get("end_time", s.get("end"))
-            add(t, st, en)
+    ts = getattr(item, "time_stamps", None)  # ForcedAlignResult
+    if ts is not None:
+        seq = getattr(ts, "items", None)
+        if seq is None and isinstance(ts, (list, tuple)):
+            seq = ts
+    if seq is None:
+        if isinstance(item, (list, tuple)):
+            seq = item
+        else:
+            for attr in ("timestamps", "segments", "words", "chunks"):
+                v = getattr(item, attr, None)
+                if v:
+                    seq = v
+                    break
+    if not seq:
+        return units
+
+    for s in seq:
+        t = getattr(s, "text", None)
+        st = getattr(s, "start_time", getattr(s, "start", None))
+        en = getattr(s, "end_time", getattr(s, "end", None))
+        if isinstance(s, dict):
+            t = t if t is not None else s.get("text")
+            st = st if st is not None else s.get("start_time", s.get("start"))
+            en = en if en is not None else s.get("end_time", s.get("end"))
+        t = (str(t) if t is not None else "").strip()
+        if t and st is not None and en is not None:
+            units.append((t, float(st), float(en)))
     return units
 
 

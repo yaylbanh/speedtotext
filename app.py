@@ -294,7 +294,7 @@ def _resolve_source(drive_file, upload_path):
         return os.path.join(DRIVE_INPUT, drive_file)
     return None
 
-def transcribe(drive_file, upload_path, language, progress=gr.Progress()):
+def _transcribe_impl(drive_file, upload_path, language, progress=gr.Progress()):
     model_name = MODEL_NAME
     audio_path = _resolve_source(drive_file, upload_path)
     if not audio_path:
@@ -329,6 +329,7 @@ def transcribe(drive_file, upload_path, language, progress=gr.Progress()):
         except Exception as exc2:
             raise gr.Error(f"Loi khi transcribe: {exc2}")
 
+    total_dur = float(getattr(info, "duration", 0) or 0)
     progress(0.85, desc="Cat dong phu de...")
     lines = build_subtitle_lines(segments)  # list (start, end, text) - da cat ngan
 
@@ -368,6 +369,17 @@ def transcribe(drive_file, upload_path, language, progress=gr.Progress()):
 
     preview = ("\n".join(saved_msgs) + "\n\n" if saved_msgs else "") + "\n".join(preview_lines)
     return tmp_srt, preview
+
+
+def transcribe(drive_file, upload_path, language, progress=gr.Progress()):
+    """Bao toan bo de LOI hien ra UI (Colab giau traceback)."""
+    import traceback
+    try:
+        return _transcribe_impl(drive_file, upload_path, language, progress)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        print(tb)
+        return None, f"❌ LOI:\n{exc}\n\n--- chi tiet ---\n{tb[-3000:]}"
 
 # ============================================================
 # 5) GIAO DIEN GRADIO
@@ -410,4 +422,4 @@ if __name__ == "__main__":
     # share=True (mac dinh, cho Colab) -> public link *.gradio.live.
     # Chay local: dat STT_SHARE=0 -> chi mo 127.0.0.1 va tu bat trinh duyet.
     share = os.environ.get("STT_SHARE", "1") != "0"
-    demo.queue().launch(share=share, inbrowser=not share)
+    demo.queue().launch(share=share, inbrowser=not share, debug=True)

@@ -1,4 +1,5 @@
 import unittest
+import sys
 from types import SimpleNamespace
 
 import app_qwen
@@ -168,6 +169,99 @@ class QwenPipelineTests(unittest.TestCase):
         )
         self.assertEqual([2, 1, 1], model.calls)
         self.assertEqual(["甲", "乙"], [app_qwen._plain_text(x[0]) for x in units])
+
+    def test_long_narration_breaks_on_story_transitions(self):
+        sentence = "到那时就可以正大光明的和女帝在一起就在我思索之际"
+        units = [
+            (char, index * 0.12, index * 0.12 + 0.1)
+            for index, char in enumerate(sentence)
+        ]
+        lines = app_qwen._group_units(units)
+        self.assertEqual(
+            [
+                "到那时",
+                "就可以正大光明的和女帝在一起",
+                "就在我思索之际",
+            ],
+            [text for _, _, text in lines],
+        )
+
+    def test_smart_wrap_avoids_breaking_domain_terms(self):
+        sentence = "而且鸿蒙剑体的觉醒让我的剑道修为大幅提升"
+        units = [
+            (char, index * 0.12, index * 0.12 + 0.1)
+            for index, char in enumerate(sentence)
+        ]
+        lines = app_qwen._group_units(units)
+        texts = [text for _, _, text in lines]
+        self.assertEqual(
+            ["而且鸿蒙剑体的觉醒", "让我的剑道修为大幅提升"],
+            texts,
+        )
+        self.assertTrue(any("鸿蒙剑体" in text for text in texts))
+
+    def test_smart_wrap_balances_unpunctuated_long_clause(self):
+        sentence = "一只由灵气凝聚而成的小仙鹤轻盈的落到了我的手中"
+        units = [
+            (char, index * 0.12, index * 0.12 + 0.1)
+            for index, char in enumerate(sentence)
+        ]
+        lines = app_qwen._group_units(units)
+        lengths = [len(text) for _, _, text in lines]
+        self.assertTrue(all(length <= app_qwen.MAX_CHARS for length in lengths))
+        self.assertLessEqual(max(lengths) - min(lengths), 5)
+
+    def test_word_boundaries_prevent_splitting_compound_words(self):
+        class FakeJieba:
+            @staticmethod
+            def setLogLevel(level):
+                return None
+
+            @staticmethod
+            def add_word(word, freq):
+                return None
+
+            @staticmethod
+            def lcut(text, cut_all=False, HMM=True):
+                return ["我是", "正道", "第一", "势力", "道宗", "的", "长老"]
+
+        old_module = sys.modules.get("jieba")
+        old_ready = app_qwen._JIEBA_READY
+        sys.modules["jieba"] = FakeJieba
+        app_qwen._JIEBA_READY = False
+        try:
+            boundaries = app_qwen._word_boundary_offsets("我是正道第一势力道宗的长老")
+        finally:
+            app_qwen._JIEBA_READY = old_ready
+            if old_module is None:
+                del sys.modules["jieba"]
+            else:
+                sys.modules["jieba"] = old_module
+
+        # "道宗" nam o offset 8-10, nen khong co boundary o giua offset 9.
+        self.assertNotIn(9, boundaries)
+        self.assertIn(10, boundaries)
+
+    def test_common_narration_phrases_create_clean_breaks(self):
+        sentence = "我嘴角不自觉的露出一抹温柔的笑容脑海中也浮现出那个女孩"
+        units = [
+            (char, index * 0.12, index * 0.12 + 0.1)
+            for index, char in enumerate(sentence)
+        ]
+        lines = app_qwen._group_units(units)
+        texts = [text for _, _, text in lines]
+        self.assertEqual("我嘴角", texts[0])
+        self.assertTrue(any(text.startswith("脑海中") for text in texts))
+
+    def test_protected_character_title_stays_together(self):
+        sentence = "此刻全都恭敬的跪拜在一位紫衣女子身前"
+        units = [
+            (char, index * 0.12, index * 0.12 + 0.1)
+            for index, char in enumerate(sentence)
+        ]
+        lines = app_qwen._group_units(units)
+        texts = [text for _, _, text in lines]
+        self.assertTrue(any("紫衣女子" in text for text in texts))
 
 
 if __name__ == "__main__":

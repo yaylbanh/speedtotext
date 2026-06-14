@@ -32,7 +32,9 @@ Silero VAD chia audio thành các đoạn ngắn và phát hiện vùng thoại 
 - **Silero VAD** xác định vùng có lời nói; không dùng Whisper để nhận dạng.
 - Timestamp qua **ForcedAligner**, tự phát hiện và retry vùng bị mất lời.
 - Có context thuật ngữ tu tiên mặc định và ô nhập tên riêng của từng phim.
-- Dùng dấu câu từ raw transcript Qwen để chia theo cụm nghĩa, rồi lấy thời gian từ ForcedAligner.
+- Dùng dấu câu từ raw transcript và cụm chuyển ý tiếng Trung để chia theo nghĩa.
+- Khi câu dài thiếu dấu, dùng Jieba chọn ranh giới từ rồi cân bằng độ dài.
+- Tránh bẻ giữa thuật ngữ tu tiên và các từ ghép tiếng Trung.
 - Hiển thị phần trăm coverage cùng các khoảng thoại còn thiếu.
 - Đọc/ghi qua Google Drive (file lớn khỏi upload web).
 - Lỗi hiện thẳng trên giao diện để dễ xử lý.
@@ -42,6 +44,7 @@ Silero VAD chia audio thành các đoạn ngắn và phát hiện vùng thoại 
 | Env | Mặc định | Ý nghĩa |
 |-----|----------|---------|
 | `STT_MAX_CHARS` | 15 | Tối đa ký tự / dòng |
+| `STT_TARGET_CHARS` | 9 | Độ dài mục tiêu khi phải chia câu dài |
 | `STT_MAX_DUR` | 2.8 | Tối đa giây / dòng |
 | `STT_GAP` | 0.28 | Khoảng nghỉ (giây) thì ngắt dòng |
 | `QWEN_LANG` | Chinese | Ngôn ngữ |

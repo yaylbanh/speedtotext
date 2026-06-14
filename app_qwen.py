@@ -54,6 +54,104 @@ _SOFT_PUNCT = "，、,：:"
 _ALL_PUNCT = _HARD_PUNCT + _SOFT_PUNCT + "\"'“”‘’（）()【】[]《》<>"
 _HARD_BREAK_MARK = "\x1e"
 _SOFT_BREAK_MARK = "\x1f"
+TARGET_LINE_CHARS = int(os.environ.get("STT_TARGET_CHARS", "9"))
+
+_NARRATIVE_STARTERS = (
+    "与此同时",
+    "就在我思索之际",
+    "就在这时",
+    "正所谓",
+    "更何况",
+    "到那时",
+    "下一秒",
+    "霎时间",
+    "刹时间",
+    "而这位",
+    "所有剑修",
+    "让我的",
+    "脑海中",
+    "一种用于",
+    "围绕着",
+    "萦绕着",
+    "都开始",
+    "轻盈的",
+    "不愧是",
+    "照这个速度",
+    "检测到",
+    "我瞬间",
+    "可我是",
+    "便如同",
+    "凭借着",
+    "不但",
+    "而且",
+    "于是",
+    "随后",
+    "随即",
+    "此时",
+    "此刻",
+    "如今",
+    "随着",
+    "只是",
+    "但是",
+    "然而",
+    "可是",
+    "很快",
+    "不用说",
+    "想必",
+    "恐怕",
+    "方才",
+    "果然",
+    "原来",
+    "就连",
+    "依旧",
+    "斩杀",
+    "瞬间",
+    "顿时",
+    "恰好",
+)
+_STANDALONE_LEADS = (
+    "到那时",
+    "就在这时",
+    "与此同时",
+    "不用说",
+    "一别多日",
+    "就在我思索之际",
+    "我嘴角",
+    "下一秒",
+    "霎时间",
+    "刹时间",
+    "果然开挂",
+)
+_BAD_LINE_END = set("的地得在与和跟向从将把被由为是及并而但或")
+_BAD_LINE_START = set("的地得了着过中上下内外间来去起出入为及与和而却也")
+_PROTECTED_TERMS = (
+    "思过崖",
+    "鸿蒙剑体",
+    "禁忌体质",
+    "不朽境",
+    "无始境",
+    "无止境",
+    "魔道女帝",
+    "签到系统",
+    "紫色神剑",
+    "灵鹤术",
+    "藏剑山",
+    "天魔教",
+    "不朽金身",
+    "肉身不灭",
+    "亘古不朽",
+    "剑道体质",
+    "道宗",
+    "老古董",
+    "系统绑定",
+    "正大光明",
+    "小仙鹤",
+    "紫衣女子",
+    "鸿蒙紫气",
+    "狂暴灵气",
+    "传递来的信息",
+)
+_JIEBA_READY = False
 
 DEFAULT_CONTEXT = (
     "修仙玄幻小说；"
@@ -349,6 +447,58 @@ def _apply_transcript_boundaries(units, transcript_text):
     marked = []
     for index, (text, start, end) in enumerate(units):
         marked.append((_merge_break_mark(text, unit_breaks.get(index)), start, end))
+    return marked
+
+
+def _apply_narrative_boundaries(units):
+    """Them diem ngat tu cac cum chuyen y khi raw transcript thieu dau cau."""
+    if not units:
+        return units
+
+    chars = []
+    owners = []
+    for unit_index, (text, _, _) in enumerate(units):
+        for char in _content_chars(_plain_text(text)):
+            chars.append(char)
+            owners.append(unit_index)
+    full_text = "".join(chars)
+    if not full_text:
+        return units
+
+    unit_breaks = {}
+
+    def set_break(unit_index):
+        if unit_index < 0:
+            return
+        current = _break_kind(units[unit_index][0])
+        if current != "hard":
+            unit_breaks[unit_index] = "soft"
+
+    for phrase in _NARRATIVE_STARTERS:
+        search_from = 0
+        while True:
+            position = full_text.find(phrase, search_from)
+            if position < 0:
+                break
+            if position > 0:
+                set_break(owners[position - 1])
+            search_from = position + len(phrase)
+
+    for phrase in _STANDALONE_LEADS:
+        search_from = 0
+        while True:
+            position = full_text.find(phrase, search_from)
+            if position < 0:
+                break
+            end_index = position + len(phrase) - 1
+            if end_index < len(owners) - 1:
+                set_break(owners[end_index])
+            search_from = position + len(phrase)
+
+    marked = []
+    for index, (text, start, end) in enumerate(units):
+        kind = _break_kind(text) or unit_breaks.get(index)
+        marked.append((_merge_break_mark(text, kind), start, end))
     return marked
 
 
@@ -687,17 +837,148 @@ def _transcribe_plans_batched(
 
 
 # ====== Cat dong SRT ======
+def _boundary_splits_protected_term(left_text, right_text):
+    for term in _PROTECTED_TERMS:
+        for split_at in range(1, len(term)):
+            if left_text.endswith(term[:split_at]) and right_text.startswith(term[split_at:]):
+                return True
+    return False
+
+
+def _boundary_penalty(left_text, right_text, gap):
+    penalty = 0.0
+    if left_text and left_text[-1] in _BAD_LINE_END:
+        penalty += 28.0
+    if right_text and right_text[0] in _BAD_LINE_START:
+        penalty += 28.0
+    if _boundary_splits_protected_term(left_text, right_text):
+        penalty += 200.0
+    if any(right_text.startswith(phrase) for phrase in _NARRATIVE_STARTERS):
+        penalty -= 35.0
+    if any(left_text.endswith(phrase) for phrase in _STANDALONE_LEADS):
+        penalty -= 35.0
+    penalty -= min(max(gap, 0.0) * 35.0, 12.0)
+    return penalty
+
+
+def _word_boundary_offsets(text):
+    """Tra ve vi tri ket thuc tu theo jieba; fallback cho phep moi ky tu."""
+    global _JIEBA_READY
+    if not text:
+        return {0}
+    try:
+        import jieba
+
+        if not _JIEBA_READY:
+            jieba.setLogLevel(20)
+            for term in _PROTECTED_TERMS:
+                jieba.add_word(term, freq=2_000_000)
+            for phrase in _NARRATIVE_STARTERS + _STANDALONE_LEADS:
+                jieba.add_word(phrase, freq=1_000_000)
+            _JIEBA_READY = True
+        boundaries = set()
+        offset = 0
+        for token in jieba.lcut(text, cut_all=False, HMM=True):
+            offset += len(token)
+            boundaries.add(offset)
+        boundaries.add(len(text))
+        return boundaries
+    except ImportError:
+        return set(range(1, len(text) + 1))
+
+
+def _wrap_clause_smart(clause):
+    """Chia clause dai tai diem co nghia, thay vi cat cung tai MAX_CHARS."""
+    if not clause:
+        return []
+    total_chars = sum(len(_plain_text(unit[0])) for unit in clause)
+    total_duration = clause[-1][2] - clause[0][1]
+    if total_chars <= MAX_CHARS and total_duration <= MAX_DUR:
+        return [clause]
+
+    count = len(clause)
+    clause_text = "".join(_plain_text(item[0]) for item in clause)
+    word_boundaries = _word_boundary_offsets(clause_text)
+    prefix_chars = [0]
+    for unit in clause:
+        prefix_chars.append(prefix_chars[-1] + len(_plain_text(unit[0])))
+
+    best_cost = [float("inf")] * (count + 1)
+    previous = [-1] * (count + 1)
+    best_cost[0] = 0.0
+
+    for start_index in range(count):
+        if best_cost[start_index] == float("inf"):
+            continue
+        line_text = ""
+        for end_index in range(start_index + 1, count + 1):
+            line_text += _plain_text(clause[end_index - 1][0])
+            line_chars = len(line_text)
+            line_duration = clause[end_index - 1][2] - clause[start_index][1]
+            if line_chars > MAX_CHARS or line_duration > MAX_DUR + 0.2:
+                break
+            if end_index < count and prefix_chars[end_index] not in word_boundaries:
+                continue
+            if end_index < count and line_chars < MIN_CHARS:
+                continue
+
+            # Uu tien 8-12 chu, nhung cho dong cuoi ngan ma khong bi phat nang.
+            length_cost = float((line_chars - TARGET_LINE_CHARS) ** 2)
+            if end_index == count:
+                length_cost *= 0.45
+
+            boundary_cost = 0.0
+            if end_index < count:
+                right_text = "".join(
+                    _plain_text(item[0]) for item in clause[end_index:]
+                )
+                gap = clause[end_index][1] - clause[end_index - 1][2]
+                boundary_cost = _boundary_penalty(line_text, right_text, gap)
+
+            candidate = best_cost[start_index] + length_cost + boundary_cost
+            if candidate < best_cost[end_index]:
+                best_cost[end_index] = candidate
+                previous[end_index] = start_index
+
+    if previous[count] < 0:
+        # Fallback hiem: giu cach cat theo gioi han neu timestamp unit bat thuong.
+        chunks = []
+        current = []
+        current_chars = 0
+        for unit in clause:
+            unit_chars = len(_plain_text(unit[0]))
+            if current and current_chars + unit_chars > MAX_CHARS:
+                chunks.append(current)
+                current = []
+                current_chars = 0
+            current.append(unit)
+            current_chars += unit_chars
+        if current:
+            chunks.append(current)
+        return chunks
+
+    chunks = []
+    cursor = count
+    while cursor > 0:
+        start_index = previous[cursor]
+        chunks.append(clause[start_index:cursor])
+        cursor = start_index
+    chunks.reverse()
+    return chunks
+
+
 def _group_units(units):
-    groups = []
+    clauses = []
     current = []
 
     def flush():
         nonlocal current
         if current:
-            groups.append(current)
+            clauses.append(current)
             current = []
 
-    for text, start, end in _dedupe_units(units):
+    prepared_units = _apply_narrative_boundaries(_dedupe_units(units))
+    for text, start, end in prepared_units:
         plain = _plain_text(text)
         if current:
             gap = start - current[-1][2]
@@ -705,23 +986,15 @@ def _group_units(units):
             if gap >= GAP_SEC and len(cur_text) >= MIN_CHARS:
                 flush()
 
-        cur_text = "".join(_plain_text(item[0]) for item in current)
-        if current and len(cur_text) + len(plain) > MAX_CHARS:
-            flush()
-
         current.append((text, start, end))
-        joined = "".join(_plain_text(item[0]) for item in current)
-        duration = current[-1][2] - current[0][1]
         break_kind = _break_kind(text)
-
-        if (
-            len(joined) >= MAX_CHARS
-            or duration >= MAX_DUR
-            or (break_kind == "hard" and len(joined) >= MIN_CHARS)
-            or (break_kind == "soft" and len(joined) >= MIN_CHARS)
-        ):
+        if break_kind in ("hard", "soft"):
             flush()
     flush()
+
+    groups = []
+    for clause in clauses:
+        groups.extend(_wrap_clause_smart(clause))
 
     lines = []
     previous_end = 0.0
